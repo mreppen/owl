@@ -768,11 +768,13 @@ module Make (Neuron : Owl_neural_neuron_sig.Sig) = struct
     | x -> x
     in
     let subnn = make_network 0 [||] [||] in
-    (* copy neurons belonging to subnetwork *)
-    let rec collect_subnn_topo n acc =
-      if Array.mem n.name in_names
-      || List.exists (fun in_acc -> in_acc.name = n.name) acc
+    (* collect neurons belonging to subnetwork *)
+    let rec collect_subnn_nodes n acc =
+      if List.exists (fun in_acc -> in_acc.name = n.name) acc
       then acc
+      else if Array.mem n.name in_names then
+        let new_in = input ~name:n.name (get_out_shape n.neuron) in
+        new_in::acc
       else match n.neuron with
       | Neuron.Input _ ->
           failwith ("Owl_neural_graph:get_subnetwork Subnetwork depends on input " ^ n.name)
@@ -780,16 +782,19 @@ module Make (Neuron : Owl_neural_neuron_sig.Sig) = struct
           (* no neuron copy *)
           let n' = make_node ~name:n.name ~train:n.train [||] [||] neur None subnn in
           let acc = n'::acc in
-          Array.fold_left (fun a prev -> collect_subnn_topo prev a) acc n.prev
+          Array.fold_left (fun a prev -> collect_subnn_nodes prev a) acc n.prev
     in
-    let subnn_inputs = Array.map
-      (fun name ->
-        let n = get_node nn name in
-        input ~name (get_out_shape n.neuron))
-      in_names
-      |> Array.to_list
+    let new_nodes = collect_subnn_nodes out_node [] in
+    (* sorts the new topology *)
+    let new_topo = Array.fold_left
+        (fun acc n ->
+          match List.find_opt (fun n' -> n'.name = n.name) new_nodes with
+          | Some n' -> n'::acc
+          | None -> acc)
+        [] nn.topo
+      |> List.rev |> Array.of_list
     in
-    subnn.topo <- collect_subnn_topo out_node subnn_inputs |> Array.of_list;
+    subnn.topo <- new_topo;
     (* re-construct network structure *)
     Array.iter
       (fun node' ->
