@@ -761,6 +761,54 @@ module Make (Neuron : Owl_neural_neuron_sig.Sig) = struct
         Neuron.load_weights n.neuron ws)
       nn.topo
 
+  let get_subnetwork ?(in_names=[||]) out_node =
+    let nn = out_node.network in
+    let in_names = match in_names with
+    | [||] -> Array.map (fun n -> n.name) nn.roots
+    | x -> x
+    in
+    let subnn = make_network 0 [||] [||] in
+    (* copy neurons belonging to subnetwork *)
+    let rec collect_subnn_topo n acc =
+      if Array.mem n.name in_names
+      || List.exists (fun in_acc -> in_acc.name = n.name) acc
+      then acc
+      else match n.neuron with
+      | Neuron.Input _ ->
+          failwith ("Owl_neural_graph:get_subnetwork Subnetwork depends on input " ^ n.name)
+      | neur ->
+          (* no neuron copy *)
+          let n' = make_node ~name:n.name ~train:n.train [||] [||] neur None subnn in
+          let acc = n'::acc in
+          Array.fold_left (fun a prev -> collect_subnn_topo prev a) acc n.prev
+    in
+    let subnn_inputs = Array.map
+      (fun name ->
+        let n = get_node nn name in
+        input ~name (get_out_shape n.neuron))
+      in_names
+      |> Array.to_list
+    in
+    subnn.topo <- collect_subnn_topo out_node subnn_inputs |> Array.of_list;
+    (* re-construct network structure *)
+    Array.iter
+      (fun node' ->
+        let node = get_node nn node'.name in
+        (if not (Array.mem node.name in_names) then
+          node'.prev <- Array.map (fun n -> get_node subnn n.name) node.prev);
+        (if not (node.name = out_node.name) then
+          (* only process nodes that are part of the subnetwork *)
+          let next = Owl_utils_array.filter
+            (fun n -> Array.exists (fun n' -> n'.name = n.name) subnn.topo)
+            node.next
+          in
+          node'.next <- Array.map (fun n -> get_node subnn n.name) next);
+        connect_to_parents node'.prev node')
+      subnn.topo;
+    subnn.roots <- Array.map (fun name -> get_node subnn name) in_names;
+    subnn.outputs <- Array.map (fun n -> get_node subnn n.name) [| out_node |];
+    subnn
+
 
   (* training functions *)
 
